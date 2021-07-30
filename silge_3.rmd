@@ -1,0 +1,116 @@
+---
+title: "silge_4.rmd"
+author: "David Espinola"
+date: "5/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+theme_set(theme_minimal())
+post_offices <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-04-13/post_offices.csv")
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r post_offices}
+post_offices %>%
+  count(state,name, sort=TRUE)
+```
+
+## Including Splits
+
+
+
+```{r hawaii, echo=FALSE}
+post_offices %>%
+  filter(state == "HI")%>%
+  pull(name)
+```
+```{r}
+library(tidymodels)
+set.seed(123)
+po_split <- post_offices %>%
+  mutate(state = case_when(state =="HI"~"Hawaii",
+                           TRUE~"Other"))%>%
+  select(name,state)%>%
+  initial_split(strata = state)
+
+po_train <- training(po_split)
+po_test <- testing(po_split)
+po_folds <- vfold_cv(po_train,strata = state)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+library(textrecipes)
+library(themis)
+po_rec <- recipe(state~name,data=po_train)%>%
+  step_tokenize(name,engine="tokenizers.bpe",training_options=list(vocab_size=200))%>%
+  step_tokenfilter(name,max_tokens=200)%>%
+  step_tf(name)%>%
+  step_normalize(all_predictors())%>%
+  step_smote(state)
+```
+
+
+```{r}
+svm_spec <-svm_linear()%>%
+  set_mode("classification")%>%
+  set_engine("LiblineaR")
+```
+```{r}
+po_wf <- workflow()%>%
+  add_recipe(po_rec)%>%
+  add_model(svm_spec)
+```
+```{r}
+set.seed(234)
+po_rs <- fit_resamples(po_wf,po_folds,metrics=metric_set(accuracy,sens,spec))
+```
+
+
+```{r}
+collect_metrics(po_rs)
+```
+
+
+```{r}
+final_fitted <- last_fit(po_wf,po_split,metrics=metric_set(accuracy,sens,spec))
+
+collect_metrics(final_fitted) %>%
+  conf_mat(state,.pred_class)%>%
+  autoplot(type="heatmap")
+```
+
+```{r}
+po_fit <- pull_workflow_fit(final_fitted$.workflow[[1]])
+liblinear_obj <- po_fit$W
+liblinear_df <- tibble(term=colnames(liblinear_obj),estimate=liblinear_obj[1,])
+
+liblinear_df %>%
+  arrange(estimate)
+
+
+liblinear_df%>%
+  arrange(-estimate)
+```
+
+
+```{r}
+liblinear_df %>%
+  filter(term !="Bias")%>%
+  group_by(estimate>0)%>%
+  slice_max(abs(estimate),n=15)%>%
+  ungroup()%>%
+  mutate(term=str_remove(term,"tf_name"))%>%
+  ggplot(aes(estimate,fct_reorder(term,estimate),fill=estimate>0))%>%
+  geom_col(show.legend=FALSE)%>%
+  labs(y=NULL)
+```
+

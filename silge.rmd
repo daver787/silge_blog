@@ -1,0 +1,141 @@
+---
+title: "silge_2.rmd"
+author: "David Espinola"
+date: "5/8/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r dataset}
+library(tidyverse)
+water_raw <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-05-04/water.csv")
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r map, echo=FALSE}
+water_raw %>%
+  filter(country_name=='Sierra Leone',status_id %in% c("y","n"),lat_deg > 0,lat_deg<15,lon_deg < 0)%>%
+  ggplot(aes(lon_deg, lat_deg, color = status_id))+
+  geom_point(alpha = 0.2)+
+  coord_fixed()+
+  guides(color=guide_legend(overrride.aes = list(alpha=1)))
+```
+```{r}
+water <- water_raw %>%
+  filter(country_name=='Sierra Leone',status_id %in% c("y","n"),lat_deg > 0,lat_deg<15,lon_deg < 0) %>%
+  mutate(pay= case_when(str_detect(pay,"^No")~"no",
+                        str_detect(pay,"^Yes")~"yes",
+         is.na(pay)~pay,
+         TRUE~"it's complicated"))%>%
+  select(-country_name, -status, -report_date)%>%
+  mutate_if(is.character,as.factor)
+```
+
+```{r}
+water %>%
+  ggplot(aes(install_year,y=..density..,fill=status_id))+
+  geom_histogram(position = 'identity',alpha=0.5)+
+  labs(fill="Water available?")
+```
+```{r}
+water %>%
+  ggplot(aes(y= pay,fill=status_id))+
+  geom_bar(position = 'fill')+
+  labs(fill= "water available?")
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+library(tidymodels)
+
+set.seed(123)
+water_split <- initial_split(water, strata= status_id)
+water_train <- water_split %>% training()
+water_test <- water_split %>% testing()
+
+set.seed(234)
+water_folds <- vfold_cv(water_train, strata = status_id)
+```
+
+```{r model}
+library(themis)
+library(tidymodels)
+library(recipes)
+ranger_spec <- rand_forest(trees=1000)%>%
+  set_mode("classification")%>%
+  set_engine("ranger")
+
+ranger_recipe <- recipe(formula=status_id~.,data=water_train) %>%
+  update_role(row_id,new_role="id")%>%
+  step_unknown(all_nominal_predictors())%>%
+  step_other(all_nominal_predictors(),threshold = 0.03)%>%
+  step_impute_linear(install_year)%>%
+  step_downsample(status_id)
+  
+
+ranger_workflow <- workflow()%>%
+  add_recipe(ranger_recipe)%>%
+  add_model(ranger_spec)
+
+doParallel::registerDoParallel()
+ranger_rs<- fit_resamples(ranger_workflow,resamples=water_folds,control = control_resamples(save_pred = TRUE))
+```
+```{r}
+collect_metrics(ranger_rs)
+```
+
+```{r}
+collect_predictions(ranger_rs) %>%
+  group_by(id)%>%
+  roc_curve(status_id,.pred_n)%>%
+  autoplot()
+  
+```
+```{r}
+conf_mat_resampled(ranger_rs,tidy=FALSE)%>%
+  autoplot()
+```
+```{r}
+last_fitted<- last_fit(ranger_workflow,water_split)
+collect_metrics(last_fitted)
+```
+```{r}
+collect_predictions(last_fitted)%>%
+  conf_mat(status_id,.pred_class)%>%
+  autoplot()
+```
+```{r}
+library(vip)
+imp_data <- ranger_recipe %>% prep() %>%bake(new_data=NULL)%>%
+  select(-row_id)
+
+
+ranger_spec%>%
+  set_engine("ranger",importance="permutation")%>%
+  fit(status_id~.,data=imp_data)%>%
+  vip(geom="point")
+```
+```{r}
+imp_data %>%
+  select(status_id,pay,water_tech,installer)%>%
+  pivot_longer(pay:installer,names_to ="feature",values_to="value")%>%
+  ggplot(aes(y=value,fill=status_id))+
+  geom_bar(position="fill")+
+  facet_grid(rows=vars(feature),scales = "free_y",space="free_y")+
+  labs(fill="Water availabile?", x= "% of water sources")+
+  scale_fill_brewer(type="qual")+
+  scale_x_continuous(labels=scales::percent)
+```
+

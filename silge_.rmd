@@ -1,0 +1,49 @@
+---
+title: "silge_4.rmd"
+author: "David Espinola"
+date: "5/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+theme_set(theme_minimal())
+post_offices <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-04-13/post_offices.csv")
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r post_offices}
+post_offices %>%
+  count(state,name, sort=TRUE)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r hawaii, echo=FALSE}
+post_offices %>%
+  filter(state == "HI")%>%
+  pull(name)
+```
+```{r}
+library(tidymodels)
+set.seed(123)
+po_split <- post_offices %>%
+  mutate(state = case_when(state =="HI"~"Hawaii",
+                           TRUE~"Other"))%>%
+  select(name,state)%>%
+  initial_split(strata = state)
+
+po_train <- training(po_split)
+po_test <- testing(po_split)
+po_folds <- vfold_cv(po_train,strata = state)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

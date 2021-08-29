@@ -74,10 +74,60 @@ rec_stop_smote <-
 
 svm_spec <- svm_linear()%>%
   set_mode("classification")%>%
-  set_engine(LiblineaR)
+  set_engine("LiblineaR")
+
 
 library(discrim)
 
 nb_spec<- naive_Bayes()%>%
   set_mode("classification")%>%
   set_engine("naivebayes")
+
+
+
+comp_models <- workflow_set(
+  preproc=list(all = rec_all,
+               all_norm = rec_all_norm,
+               stop = rec_stop,
+               stop_norm = rec_stop_norm,
+               stop_smote = rec_stop_smote),
+  models= list(nb = nb_spec,svm_spec),
+  cross=TRUE
+)
+
+doParallel::registerDoParallel()
+
+set.seed(123)
+comp_rs <- comp_models%>%
+  workflow_map(
+    "fit_resamples",
+    resamples = comp_folds,
+    metrics = metric_set(accuracy,sensitivity,specificity)
+  )
+
+autoplot(comp_rs)
+
+rank_results(comp_rs)%>%filter(.metric=="accuracy")
+
+comp_wf <- workflow(rec_all,svm_spec)
+comp_fitted <- last_fit(
+  comp_wf,
+  comp_split,
+  metrics=metric_set(accuracy,sensitivity,specificity)
+)
+
+collect_metrics(comp_fitted)
+collect_predictions(comp_fitted)%>%
+  conf_mat(char_type,.pred_class)%>%
+  autoplot()
+
+extract_workflow(comp_fitted)%>%
+  tidy()%>%
+  group_by(estimate>0)%>%
+  slice_max(abs(estimate),n=10)%>%
+  ungroup()%>%
+  mutate(term = str_remove(term,"tfidf_interaction_"))%>%
+  ggplot(aes(estimate,fct_reorder(term,estimate),fill=estimate>0))+
+  geom_col(alpha=0.8)+
+  scale_fill_discrete(labels=c("people","computer"))+
+  labs(y=NULL)
